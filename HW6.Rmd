@@ -1,0 +1,33 @@
+---
+title: "HW6"
+author: "Miriam Lachs"
+date: "2024-12-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+## Problem 1
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+
+## PProblem 2
+```{r}
+homicide= read_csv('homicide-data.csv',na = c("0", "Unknown", ""))
+
+homicide=homicide %>% mutate(city_state=str_c(city,state,sep = ',')) %>% filter(!city_state  %in% c('Dallas,TX', 'Phoenix,AZ',  'Kansas City,MO','Tulsa,AL')) %>% filter(victim_race %in% c('White','Black')) 
+```
+
