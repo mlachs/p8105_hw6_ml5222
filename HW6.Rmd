@@ -28,6 +28,52 @@ weather_df =
 ```{r}
 homicide= read_csv('homicide-data.csv',na = c("0", "Unknown", ""))
 
-homicide=homicide %>% mutate(city_state=str_c(city,state,sep = ',')) %>% filter(!city_state  %in% c('Dallas,TX', 'Phoenix,AZ',  'Kansas City,MO','Tulsa,AL')) %>% filter(victim_race %in% c('White','Black')) 
+homicide=homicide %>%
+  mutate(city_state=str_c(city,state,sep = ','),
+    resolved = as.numeric(disposition == "Closed by arrest"),
+    victim_age = as.numeric(victim_age),
+    victim_race = fct_relevel(victim_race, "White")) %>%
+  filter(!city_state  %in% c('Dallas,TX', 'Phoenix,AZ',  'Kansas City,MO','Tulsa,AL')) %>%
+  filter(victim_race %in% c('White','Black')) 
+
+glm_hom=homicide %>% filter(city_state=='Baltimore,MD') %>% 
+  glm(resolved~victim_race+victim_sex+victim_age,data = .)
+
+
+glm_hom %>% broom::tidy() %>% 
+  mutate(OR = exp(estimate)) %>% 
+  select(term, log_OR = estimate, OR, p.value) %>% 
+  filter(term=='victim_sexMale')
+```
+
+```{r}
+hom_fit_function=function(homicide_city){
+  glm_hom=homicide %>% filter(city_state==homicide_city) %>% 
+  glm(resolved~victim_race+victim_sex+victim_age,data = .)
+
+
+return(glm_hom %>% broom::tidy() %>% 
+  mutate(OR = exp(estimate)) %>% 
+  select(term, log_OR = estimate, OR, p.value)%>% 
+  filter(term=='victim_sexMale'))
+}
+```
+
+```{r}
+homicide %>% select(city_state) %>% distinct() %>% 
+  mutate(fit=map(city_state,hom_fit_function)) %>% unnest(fit)
+```
+
+
+## Problem 3 
+```{r}
+bw_df=read_csv('birthweight.csv')
+
+bw_df=bw_df %>% mutate(
+  babysex=factor(babysex,levels=c(1,2),labels=c("Male","Female")),
+  frace=factor(frace,levels=c(1,2,3,4,8,9),labels=c('White','Black','Asian','Puerto Rican','Other','Unknown')),
+  malform=factor(malform,levels=c(0,1),labels=c('absent','present')),
+  mrace=factor(mrace,levels=c(1,2,3,4,8),labels=c('White','Black','Asian','Puerto Rican','Other')))
+
 ```
 
