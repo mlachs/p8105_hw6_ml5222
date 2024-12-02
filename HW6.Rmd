@@ -7,6 +7,8 @@ output: html_document
 
 ```{r setup, include=FALSE}
 library(tidyverse)
+library(glmnet)
+library(modelr)
 ```
 ## Problem 1
 ```{r}
@@ -23,10 +25,51 @@ weather_df =
   select(name, id, everything())
 ```
 
-
-## PProblem 2
 ```{r}
-homicide= read_csv('homicide-data.csv',na = c("0", "Unknown", ""))
+r2_b0_b1=function(lm){
+  r2=lm %>% 
+    broom::glance() %>% 
+    pull(r.squared)
+  
+  logb0_b1=lm %>% 
+    broom::tidy() %>% 
+    pull(estimate) %>% 
+    prod() %>% 
+    log()
+  ans=tibble(
+    r2=r2,
+    logb0_b1=logb0_b1
+  )
+  return(ans)
+  
+  
+  
+}
+```
+
+
+
+```{r}
+boots=bootstrap(weather_df,5000) 
+
+boots=boots %>% mutate(fit=map(strap, \(x) lm(tmax~tmin, data=x) )) %>% mutate(ans=map(fit,r2_b0_b1)) %>% unnest(ans)
+
+
+boots %>% 
+  ggplot(aes(x=r2))+geom_density()
+boots %>% 
+  ggplot(aes(x=logb0_b1))+geom_density()
+
+quantile(boots %>% pull(r2),.025)
+quantile(boots %>% pull(r2),.975)
+quantile(boots %>% pull(logb0_b1),.025)
+quantile(boots %>% pull(logb0_b1),.975)
+```
+Both r2 and logb0_b1 look relatively normal.
+
+## Problem 2
+```{r}
+homicide= read_csv('homicide-data.csv')
 
 homicide=homicide %>%
   mutate(city_state=str_c(city,state,sep = ','),
@@ -37,33 +80,34 @@ homicide=homicide %>%
   filter(victim_race %in% c('White','Black')) 
 
 glm_hom=homicide %>% filter(city_state=='Baltimore,MD') %>% 
-  glm(resolved~victim_race+victim_sex+victim_age,data = .)
+  glm(resolved~victim_race+victim_sex+victim_age,data = ., family='binomial')
 
 
-glm_hom %>% broom::tidy() %>% 
-  mutate(OR = exp(estimate)) %>% 
-  select(term, log_OR = estimate, OR, p.value) %>% 
+glm_hom %>% broom::tidy(conf.int=TRUE) %>% 
+  mutate(OR = exp(estimate),conf.low=exp(conf.low),conf.high=exp(conf.high)) %>% 
+  select(term, log_OR = estimate, OR, p.value, conf.low,conf.high) %>% 
   filter(term=='victim_sexMale')
 ```
 
 ```{r}
 hom_fit_function=function(homicide_city){
   glm_hom=homicide %>% filter(city_state==homicide_city) %>% 
-  glm(resolved~victim_race+victim_sex+victim_age,data = .)
+  glm(resolved~victim_race+victim_sex+victim_age,data = .,family='binomial')
 
 
-return(glm_hom %>% broom::tidy() %>% 
-  mutate(OR = exp(estimate)) %>% 
-  select(term, log_OR = estimate, OR, p.value)%>% 
+return(glm_hom %>% broom::tidy(conf.int=TRUE) %>% 
+  mutate(OR = exp(estimate),conf.low=exp(conf.low),conf.high=exp(conf.high)) %>% 
+  select(term, log_OR = estimate, OR, p.value, conf.low,conf.high) %>% 
   filter(term=='victim_sexMale'))
 }
 ```
 
 ```{r}
 homicide %>% select(city_state) %>% distinct() %>% 
-  mutate(fit=map(city_state,hom_fit_function)) %>% unnest(fit)
+  mutate(fit=map(city_state,hom_fit_function)) %>% unnest(fit) %>% 
+  ggplot(aes(x=fct_reorder(city_state,OR),y=OR))+geom_point()+geom_errorbar(aes(ymin=conf.low,ymax = conf.high))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 ```
-
+Most of the cities have an odds ratio below 1, this indicates that if the victim is male it is less likely to be solved. 
 
 ## Problem 3 
 ```{r}
@@ -75,5 +119,74 @@ bw_df=bw_df %>% mutate(
   malform=factor(malform,levels=c(0,1),labels=c('absent','present')),
   mrace=factor(mrace,levels=c(1,2,3,4,8),labels=c('White','Black','Asian','Puerto Rican','Other')))
 
+```
+
+
+```{r}
+y <- bw_df %>% pull(bwt)
+
+x <- data.matrix(bw_df %>% select(-bwt))
+
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+
+lasso_fit <- lm(bwt~babysex+bhead+blength+delwt+fincome+frace+gaweeks+menarche+mheight+momage+mrace+parity+smoken+wtgain,data = bw_df)
+```
+Lasso Regression was used to find the model, with the high number of predictors available we used lasso to find those most important. 
+
+
+```{r}
+bw_df %>% 
+  add_predictions(lasso_fit) %>% 
+  add_residuals(lasso_fit) %>% 
+  ggplot(aes(x=pred,y=resid))+geom_point()
+```
+
+```{r}
+other_fit_1<-lm(bwt~blength+gaweeks,data = bw_df)
+other_fit_2<-lm(bwt~bhead+blength+babysex+bhead*blength*babysex,data = bw_df)
+```
+
+```{r}
+cv_df = 
+  crossv_mc(bw_df, 100) 
+
+cv_df =
+  cv_df |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df = 
+  cv_df |> 
+  mutate(
+    lasso_mod  = map(train, \(df) lm(bwt~babysex+bhead+blength+delwt+fincome+frace+gaweeks+menarche+mheight+momage+mrace+parity+smoken+wtgain, data = df)),
+    other_mod1  = map(train, \(df) lm(bwt~blength+gaweeks, data = df)),
+    other_mod2  = map(train, \(df) lm(bwt~bhead+blength+babysex+bhead*blength*babysex, data = df))) |> 
+  mutate(
+    rmse_lasso = map2_dbl(lasso_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_other1 = map2_dbl(other_mod1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_other2 = map2_dbl(other_mod2, test, \(mod, df) rmse(model = mod, data = df)))
+
+
+
+
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
 ```
 
